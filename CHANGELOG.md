@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6
+
+- Added Torn's supported timestamp cache-buster to manual armoury synchronization.
+- Sync Now now requests fresh faction inventory after deposits and withdrawals.
+
 ## 0.1.5
 
 - Split the Torn item catalog into compact storage chunks for TornPDA compatibility.
