@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.4
+// @version      0.1.5
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.4';
+  const VERSION = '0.1.5';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -37,6 +37,7 @@
     prices: PREFIX + 'prices_v1',
     state: PREFIX + 'state_v1'
   };
+  const CATALOG_CHUNK_PREFIX = PREFIX + 'catalog_chunk_';
 
   const state = {
     tab: 'dashboard',
@@ -60,6 +61,32 @@
   const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const dateText = value => value ? new Date(value).toLocaleString() : 'Never';
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function loadCatalog() {
+    const manifest = get(KEYS.catalog, {});
+    if (manifest?.format !== 'chunks-v1') return manifest || {};
+    const catalog = {};
+    for (let index = 0; index < num(manifest.chunks); index++) {
+      const chunk = get(CATALOG_CHUNK_PREFIX + index, []);
+      (Array.isArray(chunk) ? chunk : []).forEach(row => {
+        if (!Array.isArray(row) || !row[0]) return;
+        const [id, name, category, type, marketValue, lastSeen] = row;
+        catalog[String(id)] = {key:String(id), id:String(id), name:String(name || ''), category:String(category || 'other'), type:String(type || category || 'Other'), amount:0, market_value:num(marketValue), lastSeen:num(lastSeen)};
+      });
+    }
+    return catalog;
+  }
+
+  function saveCatalog(catalog) {
+    const previous = get(KEYS.catalog, {});
+    const rows = Object.values(catalog).map(item => [String(item.id || item.key), item.name, item.category, item.type, num(item.market_value), num(item.lastSeen)]);
+    const size = 175;
+    const chunks = Math.ceil(rows.length / size);
+    for (let index = 0; index < chunks; index++) set(CATALOG_CHUNK_PREFIX + index, rows.slice(index * size, (index + 1) * size));
+    const oldChunks = previous?.format === 'chunks-v1' ? num(previous.chunks) : 0;
+    for (let index = chunks; index < oldChunks; index++) del(CATALOG_CHUNK_PREFIX + index);
+    set(KEYS.catalog, {format:'chunks-v1', chunks, count:rows.length, updatedAt:Date.now()});
+  }
 
   function isArmouryPage() {
     return location.pathname.endsWith('/factions.php') && location.hash.includes('tab=armoury');
@@ -185,25 +212,19 @@
   }
 
   function mergeCatalog(inventory) {
-    const catalog = get(KEYS.catalog, {});
+    const catalog = loadCatalog();
     const whitelist = get(KEYS.whitelist, {});
     const now = Date.now();
     inventory.forEach(item => {
       const key = item.id || item.name.toLowerCase();
       catalog[key] = {...catalog[key], ...item, key, lastSeen: now};
-      if (!whitelist[key]) {
-        whitelist[key] = {
-          key, id: item.id, name: item.name, category: item.category,
-          enabled: false, target: 0, low: 0, critical: 0,
-          reserveDays: 14, loanLimit: '', restock: true, createdAt: now
-        };
-      } else {
+      if (whitelist[key]) {
         whitelist[key].name = item.name;
         whitelist[key].category = item.category;
         whitelist[key].id = item.id;
       }
     });
-    set(KEYS.catalog, catalog);
+    saveCatalog(catalog);
     set(KEYS.whitelist, whitelist);
   }
 
@@ -461,8 +482,8 @@
     const term = String(query || '').trim().toLowerCase();
     if (term.length < 3) return '<div class="aiql-picker-hint">Type at least 3 letters to see matching items.</div>';
     const whitelist = get(KEYS.whitelist, {});
-    const matches = Object.values(whitelist)
-      .filter(item => !item.enabled && (item.name.toLowerCase().includes(term) || item.category.toLowerCase().includes(term)))
+    const matches = Object.values(loadCatalog())
+      .filter(item => !whitelist[item.key]?.enabled && (item.name.toLowerCase().includes(term) || item.category.toLowerCase().includes(term)))
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, 12);
     if (!matches.length) return '<div class="aiql-picker-hint">No untracked items match that search.</div>';
@@ -470,7 +491,7 @@
   }
 
   function whitelistUI() {
-    const catalog = get(KEYS.catalog, {});
+    const catalog = loadCatalog();
     const whitelist = get(KEYS.whitelist, {});
     const live = get(KEYS.live, {inventory: []});
     const stocks = Object.fromEntries((live.inventory || []).map(i => [i.id || i.name.toLowerCase(), num(i.amount)]));
@@ -579,7 +600,7 @@
 
   function exportBackup() {
     const payload = {app: APP, version: VERSION, exportedAt: new Date().toISOString(), data: {
-      whitelist: get(KEYS.whitelist, {}), catalog: get(KEYS.catalog, {}), live: get(KEYS.live, {}),
+      whitelist: get(KEYS.whitelist, {}), catalog: loadCatalog(), live: get(KEYS.live, {}),
       loans: get(KEYS.loans, {}), history: get(KEYS.history, []), prices: get(KEYS.prices, {})
     }};
     const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
@@ -597,7 +618,7 @@
         if (payload.app !== APP || !payload.data) throw new Error('This is not an ArmouryIQ Lite backup.');
         const backup = exportMemory();
         set(PREFIX + 'pre_import_backup', backup);
-        set(KEYS.whitelist, payload.data.whitelist || {}); set(KEYS.catalog, payload.data.catalog || {});
+        set(KEYS.whitelist, payload.data.whitelist || {}); saveCatalog(payload.data.catalog || {});
         set(KEYS.live, payload.data.live || {}); set(KEYS.loans, payload.data.loans || {});
         set(KEYS.history, payload.data.history || []); set(KEYS.prices, payload.data.prices || {});
         state.status = 'Backup imported successfully.'; render();
@@ -607,7 +628,7 @@
   }
 
   function exportMemory() {
-    return {whitelist:get(KEYS.whitelist,{}),catalog:get(KEYS.catalog,{}),live:get(KEYS.live,{}),loans:get(KEYS.loans,{}),history:get(KEYS.history,[]),prices:get(KEYS.prices,{})};
+    return {whitelist:get(KEYS.whitelist,{}),catalog:loadCatalog(),live:get(KEYS.live,{}),loans:get(KEYS.loans,{}),history:get(KEYS.history,[]),prices:get(KEYS.prices,{})};
   }
 
   function diagnosticsText() {
@@ -617,13 +638,13 @@
     const checks = [
       ['API key stored', Boolean(get(KEYS.api,''))],
       ['Armoury synchronized', Boolean(live.updatedAt)],
-      ['Items discovered', Object.keys(get(KEYS.catalog,{})).length > 0],
+      ['Items discovered', Object.keys(loadCatalog()).length > 0],
       ['Whitelist available', Object.keys(whitelist).length > 0],
       ['At least one tracked item', Object.values(whitelist).some(i=>i.enabled)],
       ['History collecting', history.length > 0],
       ['Backup excludes API key', !JSON.stringify(exportMemory()).includes(String(get(KEYS.api,'')))]
     ];
-    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(get(KEYS.catalog,{})).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
+    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(loadCatalog()).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
   }
 
   function bind(root) {
@@ -672,8 +693,10 @@
       if(!button) return;
       const whitelist=get(KEYS.whitelist,{});
       const key=button.dataset.aiqlAddItem;
-      if(whitelist[key]){
-        whitelist[key].enabled=true;
+      const item=loadCatalog()[key];
+      if(item){
+        const old=whitelist[key] || {};
+        whitelist[key]={...old,key,id:item.id,name:item.name,category:item.category,enabled:true,target:num(old.target),low:num(old.low),critical:num(old.critical),reserveDays:num(old.reserveDays)||14,loanLimit:old.loanLimit ?? '',restock:old.restock !== false,createdAt:old.createdAt || Date.now()};
         set(KEYS.whitelist,whitelist);
         state.search='';
         render();
