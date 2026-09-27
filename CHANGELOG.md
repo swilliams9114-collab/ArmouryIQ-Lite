@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Changed the item picker to use Torn's complete item catalog.
+- Items can now be tracked even when the faction currently has zero in stock.
+- Added catalog market prices as an initial value for restock estimates.
+
 ## 0.1.1
 
 - Added a three-letter item picker with selectable matches.
