@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7
+
+- Added API-versus-local-storage synchronization diagnostics.
+- Diagnostics now show Torn's inventory timestamp, returned changes, totals, and save mismatches.
+
 ## 0.1.6
 
 - Added Torn's supported timestamp cache-buster to manual armoury synchronization.
