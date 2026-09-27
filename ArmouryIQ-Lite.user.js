@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.1';
+  const VERSION = '0.1.2';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -112,6 +112,23 @@
     return {items, inventoryTimestamp};
   }
 
+  async function fetchItemCatalog() {
+    const body = await apiRequest(
+      'https://api.torn.com/v2/torn/items?cat=All&sort=ASC&comment=' +
+      encodeURIComponent('ArmouryIQ Lite item catalog')
+    );
+    return (Array.isArray(body.items) ? body.items : [])
+      .filter(item => item && item.id && item.name && item.is_masked !== true)
+      .map(item => ({
+        id: String(item.id),
+        name: String(item.name),
+        category: String(item.type || 'Other').toLowerCase(),
+        type: String(item.type || 'Other'),
+        amount: 0,
+        market_value: num(item?.value?.market_price)
+      }));
+  }
+
   function normalizeInventory(rawItems) {
     const combined = {};
     const loans = {};
@@ -187,6 +204,18 @@
     state.lastError = '';
     render();
     try {
+      state.status = 'Loading Torn item catalog…';
+      renderStatusOnly();
+      const catalogItems = await fetchItemCatalog();
+      mergeCatalog(catalogItems);
+      const catalogPrices = get(KEYS.prices, {});
+      catalogItems.forEach(item => {
+        if (item.market_value > 0 && !catalogPrices[item.id]) {
+          catalogPrices[item.id] = {price: item.market_value, updatedAt: Date.now(), source: 'torn-items'};
+        }
+      });
+      set(KEYS.prices, catalogPrices);
+
       const results = [];
       for (const category of CATEGORIES) {
         state.status = 'Loading ' + category + '…';
