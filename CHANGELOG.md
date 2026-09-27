@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+- Split the Torn item catalog into compact storage chunks for TornPDA compatibility.
+- Create whitelist settings only when an item is selected instead of preloading 1,455 records.
+- Changed the three-letter picker to search the compact full catalog directly.
+
 ## 0.1.4
 
 - Added safe API response-shape diagnostics without storing API keys or item details.
