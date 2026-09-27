@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Added support for both array and ID-keyed-object item catalog responses.
+- Added discovered-item and tracked-item counts to Diagnostics.
+
 ## 0.1.2
 
 - Changed the item picker to use Torn's complete item catalog.
