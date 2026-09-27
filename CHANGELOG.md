@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4
+
+- Added safe API response-shape diagnostics without storing API keys or item details.
+- Added support for nested and ID-keyed inventory response collections.
+
 ## 0.1.3
 
 - Added support for both array and ID-keyed-object item catalog responses.
