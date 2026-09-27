@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.2';
+  const VERSION = '0.1.3';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -117,7 +117,10 @@
       'https://api.torn.com/v2/torn/items?cat=All&sort=ASC&comment=' +
       encodeURIComponent('ArmouryIQ Lite item catalog')
     );
-    return (Array.isArray(body.items) ? body.items : [])
+    const rawItems = Array.isArray(body.items)
+      ? body.items
+      : Object.entries(body.items || {}).map(([id, item]) => ({...item, id: item?.id ?? id}));
+    return rawItems
       .filter(item => item && item.id && item.name && item.is_masked !== true)
       .map(item => ({
         id: String(item.id),
@@ -595,7 +598,7 @@
       ['History collecting', history.length > 0],
       ['Backup excludes API key', !JSON.stringify(exportMemory()).includes(String(get(KEYS.api,'')))]
     ];
-    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nSnapshots: ${history.length}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
+    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(get(KEYS.catalog,{})).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
   }
 
   function bind(root) {
