@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.6
+// @version      0.1.7
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.6';
+  const VERSION = '0.1.7';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -274,8 +274,28 @@
       const allItems = results.flatMap(result => result.items);
       const newest = Math.max(0, ...results.map(result => result.inventoryTimestamp));
       const normalized = normalizeInventory(allItems);
+      const previousLive = get(KEYS.live, {inventory: []});
+      const previousByKey = Object.fromEntries((previousLive.inventory || []).map(item => [item.id || item.name.toLowerCase(), num(item.amount)]));
       const live = {updatedAt: Date.now(), sourceTimestamp: newest, inventory: normalized.inventory};
       set(KEYS.live, live);
+      const savedLive = get(KEYS.live, {inventory: []});
+      const savedByKey = Object.fromEntries((savedLive.inventory || []).map(item => [item.id || item.name.toLowerCase(), num(item.amount)]));
+      const apiChanges = normalized.inventory.filter(item => num(previousByKey[item.id || item.name.toLowerCase()]) !== num(item.amount));
+      const saveMismatches = normalized.inventory.filter(item => num(savedByKey[item.id || item.name.toLowerCase()]) !== num(item.amount));
+      const savedState = get(KEYS.state, {});
+      const debug = savedState.apiDebug || {categories: {}};
+      debug.sync = {
+        sourceTimestamp: newest,
+        apiItems: normalized.inventory.length,
+        savedItems: (savedLive.inventory || []).length,
+        apiTotal: normalized.inventory.reduce((sum, item) => sum + num(item.amount), 0),
+        savedTotal: (savedLive.inventory || []).reduce((sum, item) => sum + num(item.amount), 0),
+        changedCount: apiChanges.length,
+        changedExamples: apiChanges.slice(0, 8).map(item => `${item.name}: ${num(previousByKey[item.id || item.name.toLowerCase()])} -> ${num(item.amount)}`),
+        saveMismatchCount: saveMismatches.length,
+        mismatchExamples: saveMismatches.slice(0, 5).map(item => item.name)
+      };
+      set(KEYS.state, {...savedState, apiDebug: debug});
       set(KEYS.loans, {updatedAt: Date.now(), loans: normalized.loans});
       mergeCatalog(normalized.inventory);
       appendSnapshot(normalized.inventory, newest);
@@ -636,6 +656,8 @@
     const live = get(KEYS.live, {}); const history = get(KEYS.history, []); const whitelist = get(KEYS.whitelist, {});
     const debug = get(KEYS.state, {}).apiDebug || {};
     const categoryDebug = Object.entries(debug.categories || {}).map(([name,info]) => `${name}:${info.count ?? '?'}(${info.rawType || '?'})`).join(', ');
+    const syncDebug = debug.sync || {};
+    const sourceTime = num(syncDebug.sourceTimestamp) > 0 ? dateText(num(syncDebug.sourceTimestamp) * 1000) : 'not supplied';
     const checks = [
       ['API key stored', Boolean(get(KEYS.api,''))],
       ['Armoury synchronized', Boolean(live.updatedAt)],
@@ -645,7 +667,7 @@
       ['History collecting', history.length > 0],
       ['Backup excludes API key', !JSON.stringify(exportMemory()).includes(String(get(KEYS.api,'')))]
     ];
-    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(loadCatalog()).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
+    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(loadCatalog()).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nAPI inventory time: ${sourceTime}\nAPI items/total: ${syncDebug.apiItems ?? '?'} / ${syncDebug.apiTotal ?? '?'}\nSaved items/total: ${syncDebug.savedItems ?? '?'} / ${syncDebug.savedTotal ?? '?'}\nChanges returned: ${syncDebug.changedCount ?? '?'}${syncDebug.changedExamples?.length ? `\n${syncDebug.changedExamples.join('\n')}` : ''}\nSave mismatches: ${syncDebug.saveMismatchCount ?? '?'}${syncDebug.mismatchExamples?.length ? ` (${syncDebug.mismatchExamples.join(', ')})` : ''}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
   }
 
   function bind(root) {
