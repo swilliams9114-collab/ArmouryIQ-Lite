@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.3
+// @version      0.1.4
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.3';
+  const VERSION = '0.1.4';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -102,7 +102,19 @@
       const url = 'https://api.torn.com/v2/faction/inventory?cat=' + encodeURIComponent(category) +
         '&limit=' + limit + '&offset=' + offset + '&comment=' + encodeURIComponent('ArmouryIQ Lite');
       const body = await apiRequest(url);
-      const page = Array.isArray(body.inventory) ? body.inventory : [];
+      const rawInventory = body.inventory ?? body.data?.inventory ?? body.response?.inventory;
+      const page = Array.isArray(rawInventory)
+        ? rawInventory
+        : Object.values(rawInventory || {});
+      const savedState = get(KEYS.state, {});
+      const debug = savedState.apiDebug || {categories: {}};
+      debug.categories = debug.categories || {};
+      debug.categories[category] = {
+        keys: Object.keys(body || {}).slice(0, 12),
+        rawType: Array.isArray(rawInventory) ? 'array' : typeof rawInventory,
+        count: page.length
+      };
+      set(KEYS.state, {...savedState, apiDebug: debug});
       page.forEach(item => items.push({...item, _category: category}));
       inventoryTimestamp = Math.max(inventoryTimestamp, num(body.inventory_timestamp));
       offset += page.length;
@@ -117,10 +129,11 @@
       'https://api.torn.com/v2/torn/items?cat=All&sort=ASC&comment=' +
       encodeURIComponent('ArmouryIQ Lite item catalog')
     );
-    const rawItems = Array.isArray(body.items)
-      ? body.items
-      : Object.entries(body.items || {}).map(([id, item]) => ({...item, id: item?.id ?? id}));
-    return rawItems
+    const sourceItems = body.items ?? body.data?.items ?? body.response?.items;
+    const rawItems = Array.isArray(sourceItems)
+      ? sourceItems
+      : Object.entries(sourceItems || {}).map(([id, item]) => ({...item, id: item?.id ?? id}));
+    const parsed = rawItems
       .filter(item => item && item.id && item.name && item.is_masked !== true)
       .map(item => ({
         id: String(item.id),
@@ -130,6 +143,16 @@
         amount: 0,
         market_value: num(item?.value?.market_price)
       }));
+    const savedState = get(KEYS.state, {});
+    const debug = savedState.apiDebug || {categories: {}};
+    debug.catalog = {
+      keys: Object.keys(body || {}).slice(0, 12),
+      rawType: Array.isArray(sourceItems) ? 'array' : typeof sourceItems,
+      rawCount: rawItems.length,
+      parsedCount: parsed.length
+    };
+    set(KEYS.state, {...savedState, apiDebug: debug});
+    return parsed;
   }
 
   function normalizeInventory(rawItems) {
@@ -589,6 +612,8 @@
 
   function diagnosticsText() {
     const live = get(KEYS.live, {}); const history = get(KEYS.history, []); const whitelist = get(KEYS.whitelist, {});
+    const debug = get(KEYS.state, {}).apiDebug || {};
+    const categoryDebug = Object.entries(debug.categories || {}).map(([name,info]) => `${name}:${info.count ?? '?'}(${info.rawType || '?'})`).join(', ');
     const checks = [
       ['API key stored', Boolean(get(KEYS.api,''))],
       ['Armoury synchronized', Boolean(live.updatedAt)],
@@ -598,7 +623,7 @@
       ['History collecting', history.length > 0],
       ['Backup excludes API key', !JSON.stringify(exportMemory()).includes(String(get(KEYS.api,'')))]
     ];
-    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(get(KEYS.catalog,{})).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
+    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(get(KEYS.catalog,{})).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
   }
 
   function bind(root) {
