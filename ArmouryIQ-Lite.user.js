@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.5
+// @version      0.1.6
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.5';
+  const VERSION = '0.1.6';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -127,7 +127,8 @@
     let inventoryTimestamp = 0;
     while (offset < 10000) {
       const url = 'https://api.torn.com/v2/faction/inventory?cat=' + encodeURIComponent(category) +
-        '&limit=' + limit + '&offset=' + offset + '&comment=' + encodeURIComponent('ArmouryIQ Lite');
+        '&limit=' + limit + '&offset=' + offset + '&timestamp=' + Math.floor(Date.now() / 1000) +
+        '&comment=' + encodeURIComponent('ArmouryIQ Lite');
       const body = await apiRequest(url);
       const rawInventory = body.inventory ?? body.data?.inventory ?? body.response?.inventory;
       const page = Array.isArray(rawInventory)
