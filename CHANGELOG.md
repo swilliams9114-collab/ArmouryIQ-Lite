@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Reduced Consumption Tracker syncing and retention from one year to 90 days.
+- Removed the 365-day filter and lowered the local activity safety cap.
+- Existing consumption data older than 90 days is removed on the next sync.
+
 ## 0.2.0
 
 - Added a searchable Consumption Tracker powered by faction armory news.
