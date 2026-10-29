@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.1.7
+// @version      0.2.0
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,13 +19,13 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.1.7';
+  const VERSION = '0.2.0';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
   const DAY = 86400000;
   const CATEGORIES = ['weapons','armor','temporary','medical','consumables','drugs','boosters','utilities','loot'];
-  const CUSTOM_KEY_URL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=ArmouryIQ%20Lite&faction=inventory&market=itemmarket&torn=items&key=info';
+  const CUSTOM_KEY_URL = 'https://www.torn.com/preferences.php#tab=api?step=addNewKey&title=ArmouryIQ%20Lite&faction=inventory,news&market=itemmarket&torn=items&key=info';
 
   const KEYS = {
     api: PREFIX + 'api_key',
@@ -35,9 +35,11 @@
     loans: PREFIX + 'loans_v1',
     history: PREFIX + 'history_v1',
     prices: PREFIX + 'prices_v1',
-    state: PREFIX + 'state_v1'
+    state: PREFIX + 'state_v1',
+    consumption: PREFIX + 'consumption_v1'
   };
   const CATALOG_CHUNK_PREFIX = PREFIX + 'catalog_chunk_';
+  const CONSUMPTION_CHUNK_PREFIX = PREFIX + 'consumption_chunk_';
 
   const state = {
     tab: 'dashboard',
@@ -45,7 +47,10 @@
     status: '',
     lastError: '',
     search: '',
-    whitelistOnly: false
+    whitelistOnly: false,
+    consumptionSearch: '',
+    consumptionItem: '',
+    consumptionDays: 30
   };
 
   const get = (key, fallback) => {
@@ -86,6 +91,29 @@
     const oldChunks = previous?.format === 'chunks-v1' ? num(previous.chunks) : 0;
     for (let index = chunks; index < oldChunks; index++) del(CATALOG_CHUNK_PREFIX + index);
     set(KEYS.catalog, {format:'chunks-v1', chunks, count:rows.length, updatedAt:Date.now()});
+  }
+
+  function loadConsumption() {
+    const manifest = get(KEYS.consumption, {});
+    if (manifest?.format !== 'chunks-v1') return Array.isArray(manifest) ? manifest : [];
+    const events = [];
+    for (let index = 0; index < num(manifest.chunks); index++) {
+      const chunk = get(CONSUMPTION_CHUNK_PREFIX + index, []);
+      if (Array.isArray(chunk)) events.push(...chunk);
+    }
+    return events;
+  }
+
+  function saveConsumption(events) {
+    const previous = get(KEYS.consumption, {});
+    const cutoff = Date.now() - 365 * DAY;
+    const clean = events.filter(row => num(row.ts) >= cutoff).sort((a,b) => num(b.ts) - num(a.ts)).slice(0, 20000);
+    const size = 250;
+    const chunks = Math.ceil(clean.length / size);
+    for (let index = 0; index < chunks; index++) set(CONSUMPTION_CHUNK_PREFIX + index, clean.slice(index * size, (index + 1) * size));
+    const oldChunks = previous?.format === 'chunks-v1' ? num(previous.chunks) : 0;
+    for (let index = chunks; index < oldChunks; index++) del(CONSUMPTION_CHUNK_PREFIX + index);
+    set(KEYS.consumption, {format:'chunks-v1', chunks, count:clean.length, updatedAt:Date.now()});
   }
 
   function isArmouryPage() {
@@ -181,6 +209,100 @@
     };
     set(KEYS.state, {...savedState, apiDebug: debug});
     return parsed;
+  }
+
+  function plainNewsText(value) {
+    const box = document.createElement('div');
+    box.innerHTML = String(value || '');
+    return String(box.textContent || box.innerText || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function newsAction(text) {
+    const value = text.toLowerCase();
+    if (/\bused\b|\bconsumed\b/.test(value)) return 'used';
+    if (/\breturned\b|\bgave back\b/.test(value)) return 'returned';
+    if (/\brecovered\b|\bretrieved\b/.test(value)) return 'recovered';
+    if (/\bloaned\b|\bborrowed\b/.test(value)) return 'loaned';
+    if (/\bdeposited\b|\badded\b/.test(value)) return 'deposited';
+    if (/\bwithdrew\b|\bremoved\b|\btook\b/.test(value)) return 'withdrawn';
+    return 'armory action';
+  }
+
+  function parseNewsRecord(record, fallbackId, catalog) {
+    const text = plainNewsText(record?.text ?? record?.news ?? record?.description ?? record?.title ?? '');
+    if (!text) return null;
+    const lower = text.toLowerCase();
+    const item = catalog.find(entry => lower.includes(entry.name.toLowerCase()));
+    if (!item) return null;
+    const index = lower.indexOf(item.name.toLowerCase());
+    const before = text.slice(Math.max(0, index - 45), index);
+    const amountMatches = [...before.matchAll(/([\d,]+)\s*x?\s*/gi)];
+    const amount = amountMatches.length ? num(amountMatches[amountMatches.length - 1][1].replace(/,/g,'')) : 1;
+    const action = newsAction(text);
+    const userObject = record?.user || record?.member || record?.player;
+    let memberName = String(userObject?.name || record?.user_name || record?.member_name || '').trim();
+    let memberId = String(userObject?.id || record?.user_id || record?.member_id || '').trim();
+    if (!memberName) {
+      const verbs = '(?:used|consumed|returned|recovered|retrieved|loaned|borrowed|deposited|added|withdrew|removed|took)';
+      const match = text.match(new RegExp('^(.+?)\\s+' + verbs + '\\b', 'i'));
+      memberName = String(match?.[1] || 'Unknown member').replace(/\s*\[\d+\]\s*$/, '').trim();
+      if (!memberId) memberId = String(match?.[1]?.match(/\[(\d+)\]/)?.[1] || '');
+    }
+    const timestamp = num(record?.timestamp ?? record?.created_at ?? record?.time);
+    const ts = timestamp > 1000000000000 ? timestamp : timestamp * 1000;
+    const id = String(record?.id ?? record?.news_id ?? fallbackId ?? `${ts}|${text}`);
+    return {id, ts, itemId:String(item.id), itemName:item.name, memberId, memberName, amount:Math.max(1,amount), action, text};
+  }
+
+  async function syncConsumption() {
+    if (state.busy) return;
+    state.busy = true;
+    state.lastError = '';
+    state.status = 'Loading faction armory activity…';
+    render();
+    try {
+      const cutoffSeconds = Math.floor((Date.now() - 365 * DAY) / 1000);
+      const incoming = [];
+      const catalog = Object.values(loadCatalog()).sort((a,b) => b.name.length - a.name.length);
+      let rawChecked = 0;
+      let offset = 0;
+      const limit = 100;
+      while (offset < 20000) {
+        state.status = `Loading armory activity… ${offset.toLocaleString()} records checked`;
+        renderStatusOnly();
+        const url = 'https://api.torn.com/v2/faction/news?cat=armoryAction&from=' + cutoffSeconds +
+          '&sort=DESC&limit=' + limit + '&offset=' + offset + '&stripTags=true&timestamp=' +
+          Math.floor(Date.now() / 1000) + '&comment=' + encodeURIComponent('ArmouryIQ news');
+        const body = await apiRequest(url);
+        const source = body.news ?? body.data?.news ?? body.response?.news;
+        const page = Array.isArray(source)
+          ? source.map((row,index) => [row?.id ?? `${offset + index}`, row])
+          : Object.entries(source || {});
+        rawChecked += page.length;
+        page.forEach(([id,row]) => {
+          const parsed = parseNewsRecord(row,id,catalog);
+          if (parsed) incoming.push(parsed);
+        });
+        offset += page.length;
+        const total = Number(body?._metadata?.total ?? body?._metadata?.links?.total);
+        if (!page.length || page.length < limit || (Number.isFinite(total) && offset >= total)) break;
+        await sleep(650);
+      }
+      const merged = new Map(loadConsumption().map(row => [String(row.id), row]));
+      incoming.forEach(row => merged.set(String(row.id), row));
+      saveConsumption([...merged.values()]);
+      const savedState = get(KEYS.state, {});
+      set(KEYS.state, {...savedState, consumptionSync:Date.now(), consumptionImported:incoming.length, consumptionRawChecked:rawChecked});
+      state.status = `Consumption synchronized — ${incoming.length.toLocaleString()} matching armory records found.`;
+    } catch (error) {
+      const message = error.message || String(error);
+      state.lastError = /access|permission|selection|16/i.test(message)
+        ? 'Consumption needs an updated ArmouryIQ API key with Faction → News permission. Open Settings and create a new custom key.'
+        : 'Consumption sync failed: ' + message;
+    } finally {
+      state.busy = false;
+      render();
+    }
   }
 
   function normalizeInventory(rawItems) {
@@ -408,7 +530,7 @@
   }
 
   function nav() {
-    const tabs = [['dashboard','Dashboard'],['alerts','Alerts'],['inventory','Inventory'],['restock','Restock'],['usage','Usage'],['loans','Loans'],['reports','Reports'],['whitelist','Whitelist'],['settings','Settings']];
+    const tabs = [['dashboard','Dashboard'],['alerts','Alerts'],['inventory','Inventory'],['restock','Restock'],['usage','Usage'],['consumption','Consumption'],['loans','Loans'],['reports','Reports'],['whitelist','Whitelist'],['settings','Settings']];
     return '<div class="aiql-nav">' + tabs.map(([id,label]) => '<button data-aiql-tab="' + id + '" class="' + (state.tab === id ? 'active' : '') + '">' + label + '</button>').join('') + '</div>';
   }
 
@@ -484,6 +606,68 @@
 
   function usage(list) {
     return `<div class="aiql-card"><h3>Usage Intelligence</h3><p class="aiql-muted">Local estimates use observed inventory decreases and ignore increases/restocks. Six days of history are required before learned targets activate.</p>${list.length ? table(list,'usage') : '<div class="aiql-empty">Whitelist items and collect snapshots to begin learning.</div>'}</div>`;
+  }
+
+  function consumptionSuggestionsHTML(query) {
+    const term = String(query || '').trim().toLowerCase();
+    if (term.length < 3) return '<div class="aiql-picker-hint">Type at least 3 letters to search all Torn items.</div>';
+    const matches = Object.values(loadCatalog())
+      .filter(item => item.name.toLowerCase().includes(term))
+      .sort((a,b) => a.name.localeCompare(b.name)).slice(0,12);
+    if (!matches.length) return '<div class="aiql-picker-hint">No items match that search.</div>';
+    return matches.map(item => `<button type="button" class="aiql-suggestion" data-aiql-consumption-item="${esc(item.id)}"><span>${esc(item.name)}</span><small>${esc(item.category)}</small><b>View</b></button>`).join('');
+  }
+
+  function consumptionData() {
+    const itemId = String(state.consumptionItem || '');
+    const cutoff = num(state.consumptionDays) === 1
+      ? new Date().setHours(0,0,0,0)
+      : Date.now() - num(state.consumptionDays) * DAY;
+    const events = loadConsumption().filter(row => String(row.itemId) === itemId && num(row.ts) >= cutoff);
+    const used = events.filter(row => row.action === 'used');
+    const members = {};
+    used.forEach(row => {
+      const key = row.memberId || row.memberName;
+      if (!members[key]) members[key] = {name:row.memberName || 'Unknown member', amount:0, events:0};
+      members[key].amount += num(row.amount); members[key].events++;
+    });
+    return {events, used, members:Object.values(members).sort((a,b) => b.amount-a.amount || a.name.localeCompare(b.name))};
+  }
+
+  function consumptionReport() {
+    const item = loadCatalog()[String(state.consumptionItem || '')];
+    if (!item) return 'Select an item first.';
+    const data = consumptionData();
+    const total = data.used.reduce((sum,row) => sum + num(row.amount),0);
+    const period = num(state.consumptionDays) === 1 ? 'Today' : `Last ${state.consumptionDays} days`;
+    return `AURORA SURREALIS — CONSUMPTION REPORT\nItem: ${item.name}\nPeriod: ${period}\nUpdated: ${new Date().toLocaleString()}\n\nTotal used: ${qty(total)}\n\nBY MEMBER\n` +
+      (data.members.length ? data.members.map(row => `${row.name}: ${qty(row.amount)}`).join('\n') : 'No recorded use.') +
+      `\n\nACTIVITY\n` + (data.used.length ? data.used.slice(0,50).map(row => `${new Date(row.ts).toLocaleString()} — ${row.memberName} used ${qty(row.amount)}`).join('\n') : 'No recorded use.');
+  }
+
+  function consumptionUI() {
+    const item = loadCatalog()[String(state.consumptionItem || '')];
+    const stored = loadConsumption();
+    const manifest = get(KEYS.consumption, {});
+    const lastSync = get(KEYS.state, {}).consumptionSync;
+    if (!item) return `<div class="aiql-card"><div class="aiql-card-head"><h3>Consumption Tracker</h3><button data-aiql-action="sync-consumption" ${state.busy?'disabled':''}>${state.busy?'Syncing…':'Sync Consumption'}</button></div>
+      <p class="aiql-muted">Search an item to see how many were used, who used them, and when.</p>
+      <input id="aiql-consumption-picker" class="aiql-picker-input" autocomplete="off" placeholder="Example: law, xan, moon" value="${esc(state.consumptionSearch)}">
+      <div id="aiql-consumption-suggestions" class="aiql-suggestions">${consumptionSuggestionsHTML(state.consumptionSearch)}</div>
+      <div class="aiql-muted aiql-consumption-meta">${stored.length.toLocaleString()} searchable records · Last sync: ${esc(dateText(lastSync))}</div>
+    </div>`;
+    const data = consumptionData();
+    const total = data.used.reduce((sum,row) => sum + num(row.amount),0);
+    const memberRows = data.members.map(row => `<tr><td><strong>${esc(row.name)}</strong></td><td>${qty(row.amount)}</td><td>${qty(row.events)}</td></tr>`).join('');
+    const activityRows = data.events.slice(0,200).map(row => `<tr><td>${esc(new Date(row.ts).toLocaleString())}</td><td><strong>${esc(row.memberName)}</strong></td><td>${statusPill(row.action.toUpperCase())}</td><td>${qty(row.amount)}</td></tr>`).join('');
+    return `<div class="aiql-card"><div class="aiql-card-head"><div><h3>${esc(item.name)}</h3><span class="aiql-muted">Consumption Tracker</span></div><div class="aiql-actions"><button data-aiql-action="change-consumption-item">Change Item</button><button data-aiql-action="sync-consumption" ${state.busy?'disabled':''}>Sync</button></div></div>
+      <div class="aiql-consumption-filters">${[1,7,30,90,365].map(days => `<button data-aiql-consumption-days="${days}" class="${num(state.consumptionDays)===days?'active':''}">${days===1?'Today':days+' Days'}</button>`).join('')}</div>
+      <div class="aiql-grid aiql-kpis aiql-consumption-kpis"><div class="aiql-card"><span>Total Used</span><strong>${qty(total)}</strong><small>Last ${state.consumptionDays} day(s)</small></div><div class="aiql-card"><span>Members</span><strong>${data.members.length}</strong><small>Recorded users</small></div><div class="aiql-card"><span>Use Events</span><strong>${data.used.length}</strong><small>Individual logs</small></div></div>
+      <button data-aiql-action="copy-consumption">Copy Staff Report</button>
+    </div>
+    <div class="aiql-card"><h3>Usage by Member</h3>${memberRows?`<div class="aiql-table-wrap"><table><thead><tr><th>Member</th><th>Used</th><th>Events</th></tr></thead><tbody>${memberRows}</tbody></table></div>`:'<div class="aiql-empty">No recorded consumption in this period.</div>'}</div>
+    <div class="aiql-card"><h3>Activity</h3><p class="aiql-muted">Used items count as consumption. Loans, returns, withdrawals, and recoveries remain labeled separately.</p>${activityRows?`<div class="aiql-table-wrap"><table><thead><tr><th>Date</th><th>Member</th><th>Action</th><th>Qty</th></tr></thead><tbody>${activityRows}</tbody></table></div>`:'<div class="aiql-empty">No armory activity found for this item and period.</div>'}</div>
+    <div class="aiql-muted aiql-consumption-meta">${manifest.count || stored.length} stored records · Last sync: ${esc(dateText(lastSync))}</div>`;
   }
 
   function loans() {
@@ -582,6 +766,7 @@
     if (state.tab === 'inventory') return inventory(list);
     if (state.tab === 'restock') return restock(list);
     if (state.tab === 'usage') return usage(list);
+    if (state.tab === 'consumption') return consumptionUI();
     if (state.tab === 'loans') return loans();
     if (state.tab === 'reports') return reports();
     if (state.tab === 'whitelist') return whitelistUI();
@@ -622,7 +807,8 @@
   function exportBackup() {
     const payload = {app: APP, version: VERSION, exportedAt: new Date().toISOString(), data: {
       whitelist: get(KEYS.whitelist, {}), catalog: loadCatalog(), live: get(KEYS.live, {}),
-      loans: get(KEYS.loans, {}), history: get(KEYS.history, []), prices: get(KEYS.prices, {})
+      loans: get(KEYS.loans, {}), history: get(KEYS.history, []), prices: get(KEYS.prices, {}),
+      consumption: loadConsumption()
     }};
     const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
@@ -642,6 +828,7 @@
         set(KEYS.whitelist, payload.data.whitelist || {}); saveCatalog(payload.data.catalog || {});
         set(KEYS.live, payload.data.live || {}); set(KEYS.loans, payload.data.loans || {});
         set(KEYS.history, payload.data.history || []); set(KEYS.prices, payload.data.prices || {});
+        saveConsumption(payload.data.consumption || []);
         state.status = 'Backup imported successfully.'; render();
       } catch (error) { state.lastError = error.message; render(); }
     };
@@ -649,7 +836,7 @@
   }
 
   function exportMemory() {
-    return {whitelist:get(KEYS.whitelist,{}),catalog:loadCatalog(),live:get(KEYS.live,{}),loans:get(KEYS.loans,{}),history:get(KEYS.history,[]),prices:get(KEYS.prices,{})};
+    return {whitelist:get(KEYS.whitelist,{}),catalog:loadCatalog(),live:get(KEYS.live,{}),loans:get(KEYS.loans,{}),history:get(KEYS.history,[]),prices:get(KEYS.prices,{}),consumption:loadConsumption()};
   }
 
   function diagnosticsText() {
@@ -665,9 +852,10 @@
       ['Whitelist available', Object.keys(whitelist).length > 0],
       ['At least one tracked item', Object.values(whitelist).some(i=>i.enabled)],
       ['History collecting', history.length > 0],
+      ['Consumption storage available', Array.isArray(loadConsumption())],
       ['Backup excludes API key', !JSON.stringify(exportMemory()).includes(String(get(KEYS.api,'')))]
     ];
-    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(loadCatalog()).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nAPI inventory time: ${sourceTime}\nAPI items/total: ${syncDebug.apiItems ?? '?'} / ${syncDebug.apiTotal ?? '?'}\nSaved items/total: ${syncDebug.savedItems ?? '?'} / ${syncDebug.savedTotal ?? '?'}\nChanges returned: ${syncDebug.changedCount ?? '?'}${syncDebug.changedExamples?.length ? `\n${syncDebug.changedExamples.join('\n')}` : ''}\nSave mismatches: ${syncDebug.saveMismatchCount ?? '?'}${syncDebug.mismatchExamples?.length ? ` (${syncDebug.mismatchExamples.join(', ')})` : ''}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
+    return checks.map(([name,ok]) => `${ok?'PASS':'WARNING'} — ${name}`).join('\n') + `\n\nDiscovered items: ${Object.keys(loadCatalog()).length}\nTracked items: ${Object.values(whitelist).filter(item=>item.enabled).length}\nSnapshots: ${history.length}\nConsumption news checked: ${get(KEYS.state,{}).consumptionRawChecked ?? 0}\nConsumption records: ${loadConsumption().length}\nConsumption sync: ${dateText(get(KEYS.state,{}).consumptionSync)}\nCatalog keys: ${(debug.catalog?.keys || []).join(', ') || 'none'}\nCatalog raw: ${debug.catalog?.rawType || 'unknown'} / ${debug.catalog?.rawCount ?? '?'}; parsed: ${debug.catalog?.parsedCount ?? '?'}\nInventory counts: ${categoryDebug || 'none'}\nAPI inventory time: ${sourceTime}\nAPI items/total: ${syncDebug.apiItems ?? '?'} / ${syncDebug.apiTotal ?? '?'}\nSaved items/total: ${syncDebug.savedItems ?? '?'} / ${syncDebug.savedTotal ?? '?'}\nChanges returned: ${syncDebug.changedCount ?? '?'}${syncDebug.changedExamples?.length ? `\n${syncDebug.changedExamples.join('\n')}` : ''}\nSave mismatches: ${syncDebug.saveMismatchCount ?? '?'}${syncDebug.mismatchExamples?.length ? ` (${syncDebug.mismatchExamples.join(', ')})` : ''}\nLast sync: ${dateText(live.updatedAt)}\nVersion: ${VERSION}`;
   }
 
   function bind(root) {
@@ -684,6 +872,9 @@
         catch(error){ state.lastError=error.message; state.status=''; render(); } return;
       }
       if (action === 'sync') { await syncInventory(); return; }
+      if (action === 'sync-consumption') { await syncConsumption(); return; }
+      if (action === 'change-consumption-item') { state.consumptionItem=''; state.consumptionSearch=''; render(); return; }
+      if (action === 'copy-consumption') { GM_setClipboard(consumptionReport()); state.status='Consumption report copied.'; renderStatusOnly(); return; }
       if (action === 'prices') { await refreshPrices(); return; }
       if (action === 'copy-restock') { GM_setClipboard(makeReport('restock')); state.status='Restock report copied.'; renderStatusOnly(); return; }
       if (action === 'replace-key') { del(KEYS.api); render(); return; }
@@ -692,6 +883,7 @@
       if (action === 'import') { root.querySelector('#aiql-import-file')?.click(); return; }
       if (action === 'diagnostics') { const out=root.querySelector('#aiql-diagnostics'); if(out) out.textContent=diagnosticsText(); return; }
       if (action === 'reset' && confirm('Reset ArmouryIQ settings and local history? Export a backup first.')) {
+        const consumptionManifest=get(KEYS.consumption,{}); for(let index=0;index<num(consumptionManifest?.chunks);index++) del(CONSUMPTION_CHUNK_PREFIX+index);
         Object.values(KEYS).forEach(del); state.tab='dashboard'; state.status=''; state.lastError=''; render();
       }
     }));
@@ -725,6 +917,24 @@
         render();
       }
     });
+    const consumptionPicker=root.querySelector('#aiql-consumption-picker');
+    if(consumptionPicker) consumptionPicker.addEventListener('input',()=>{
+      state.consumptionSearch=consumptionPicker.value;
+      const suggestions=root.querySelector('#aiql-consumption-suggestions');
+      if(suggestions) suggestions.innerHTML=consumptionSuggestionsHTML(state.consumptionSearch);
+    });
+    const consumptionSuggestions=root.querySelector('#aiql-consumption-suggestions');
+    if(consumptionSuggestions) consumptionSuggestions.addEventListener('click',event=>{
+      const button=event.target.closest('[data-aiql-consumption-item]');
+      if(!button) return;
+      state.consumptionItem=button.dataset.aiqlConsumptionItem;
+      state.consumptionSearch='';
+      render();
+    });
+    root.querySelectorAll('[data-aiql-consumption-days]').forEach(button=>button.addEventListener('click',()=>{
+      state.consumptionDays=num(button.dataset.aiqlConsumptionDays)||30;
+      render();
+    }));
     const importInput=root.querySelector('#aiql-import-file'); if(importInput) importInput.addEventListener('change',()=>{if(importInput.files?.[0]) importBackup(importInput.files[0]);});
   }
 
@@ -738,6 +948,7 @@
       .aiql-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.aiql-kpis{grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:10px}.aiql-card{background:#24272d;border:1px solid #363b44;border-radius:7px;padding:12px;margin-bottom:10px}.aiql-card h3{margin:0 0 9px;color:#f3f4f6;font-size:15px}.aiql-card p{line-height:1.45}.aiql-card>span{display:block;color:#aeb6c3;font-size:12px}.aiql-card>strong{display:block;color:#fff;font-size:21px;margin:4px 0}.aiql-card>small{color:#8e98a7}.aiql-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.aiql-actions{display:flex;flex-wrap:wrap;gap:7px}.aiql-banner{padding:9px;background:#172033;border-radius:5px;margin:8px 0;color:#c7d2fe}.aiql-empty{padding:20px;text-align:center;color:#98a2b3}
       .aiql-table-wrap{overflow:auto;margin-top:9px}table{width:100%;border-collapse:collapse;min-width:680px}th,td{padding:8px;border-bottom:1px solid #373b43;text-align:left}th{color:#b7bfcc;font-size:12px}td small{display:block;color:#8993a1;margin-top:2px}.aiql-link{color:#8fb1ff;text-decoration:none}.aiql-pill{display:inline-block;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:800}.aiql-critical,.aiql-poor,.aiql-over-limit{background:#7f1d1d;color:#fecaca}.aiql-low,.aiql-watch,.aiql-no-limit{background:#78350f;color:#fde68a}.aiql-learning,.aiql-setup{background:#343b4b;color:#cbd5e1}.aiql-healthy,.aiql-good,.aiql-excellent,.aiql-ok{background:#14532d;color:#bbf7d0}
       .aiql-key-row{display:flex;gap:7px;margin:6px 0 10px}.aiql-key-row input,.aiql-picker-input,.aiql-rule input[type=number]{background:#17191e;border:1px solid #424750;color:#fff;border-radius:4px;padding:7px}.aiql-key-row input{flex:1;min-width:0}.aiql-picker-input{width:100%;font-size:16px;padding:10px}.aiql-suggestions{display:flex;flex-direction:column;gap:5px;margin-top:7px}.aiql-suggestion{display:grid!important;grid-template-columns:1fr auto auto;align-items:center;gap:9px;text-align:left!important;background:#1b1e24!important}.aiql-suggestion small{color:#98a2b3}.aiql-suggestion b{color:#93c5fd}.aiql-picker-hint{padding:10px;color:#98a2b3}.aiql-rule{display:grid;grid-template-columns:38px minmax(150px,2fr) repeat(5,minmax(75px,1fr)) 75px;gap:8px;align-items:end;padding:9px 0;border-bottom:1px solid #373b43}.aiql-rule label{font-size:11px;color:#9da6b3}.aiql-rule input[type=number]{display:block;width:100%;margin-top:3px}.aiql-rule-name{align-self:center}.aiql-rule-name small{display:block;color:#8e98a7}.aiql-toggle{align-self:center}.aiql-toggle input{width:20px;height:20px}.aiql-check{align-self:center;text-align:center}.aiql-check input{display:block;margin:5px auto 0}pre{white-space:pre-wrap;word-break:break-word;background:#17191e;border-radius:5px;padding:10px;color:#d8dee9;max-height:420px;overflow:auto}.aiql-report-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+      .aiql-consumption-filters{display:flex;gap:6px;overflow-x:auto;margin:12px 0}.aiql-consumption-filters button{white-space:nowrap;border:1px solid #465061;background:#2b3038;color:#e6e9ef;border-radius:5px;padding:7px 10px;font-weight:600}.aiql-consumption-filters button.active{background:#4d73ff;border-color:#4d73ff;color:#fff}.aiql-consumption-meta{padding:9px 2px}.aiql-consumption-kpis{margin-top:10px}.aiql-used{background:#4c1d95;color:#e9d5ff}.aiql-returned,.aiql-recovered{background:#14532d;color:#bbf7d0}.aiql-loaned,.aiql-withdrawn{background:#78350f;color:#fde68a}
       @media(max-width:800px){.aiql-grid,.aiql-kpis,.aiql-report-grid{grid-template-columns:1fr 1fr}.aiql-rule{grid-template-columns:34px 1fr 80px}.aiql-rule label:nth-of-type(n+3){grid-column:auto}.aiql-card{padding:10px}}
       @media(max-width:520px){.aiql-grid,.aiql-kpis,.aiql-report-grid{grid-template-columns:1fr 1fr}.aiql-rule{grid-template-columns:32px 1fr 75px}.aiql-rule-name{grid-column:2/4}.aiql-header{padding:11px}.aiql-body{padding:9px}}
     `; document.head.appendChild(style);
