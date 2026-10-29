@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Added a searchable Consumption Tracker powered by faction armory news.
+- Added item search, date ranges, total usage, member totals, and a detailed activity timeline.
+- Added manual consumption synchronization and copyable staff reports.
+- Added compact one-year local activity storage with backup and restore support.
+- Updated custom-key creation to request Faction Inventory and Faction News only.
+
 ## 0.1.7
 
 - Added API-versus-local-storage synchronization diagnostics.
