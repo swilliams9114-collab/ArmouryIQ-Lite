@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.0';
+  const VERSION = '0.2.1';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -106,8 +106,8 @@
 
   function saveConsumption(events) {
     const previous = get(KEYS.consumption, {});
-    const cutoff = Date.now() - 365 * DAY;
-    const clean = events.filter(row => num(row.ts) >= cutoff).sort((a,b) => num(b.ts) - num(a.ts)).slice(0, 20000);
+    const cutoff = Date.now() - 90 * DAY;
+    const clean = events.filter(row => num(row.ts) >= cutoff).sort((a,b) => num(b.ts) - num(a.ts)).slice(0, 7500);
     const size = 250;
     const chunks = Math.ceil(clean.length / size);
     for (let index = 0; index < chunks; index++) set(CONSUMPTION_CHUNK_PREFIX + index, clean.slice(index * size, (index + 1) * size));
@@ -261,13 +261,13 @@
     state.status = 'Loading faction armory activity…';
     render();
     try {
-      const cutoffSeconds = Math.floor((Date.now() - 365 * DAY) / 1000);
+      const cutoffSeconds = Math.floor((Date.now() - 90 * DAY) / 1000);
       const incoming = [];
       const catalog = Object.values(loadCatalog()).sort((a,b) => b.name.length - a.name.length);
       let rawChecked = 0;
       let offset = 0;
       const limit = 100;
-      while (offset < 20000) {
+      while (offset < 10000) {
         state.status = `Loading armory activity… ${offset.toLocaleString()} records checked`;
         renderStatusOnly();
         const url = 'https://api.torn.com/v2/faction/news?cat=armoryAction&from=' + cutoffSeconds +
@@ -661,7 +661,7 @@
     const memberRows = data.members.map(row => `<tr><td><strong>${esc(row.name)}</strong></td><td>${qty(row.amount)}</td><td>${qty(row.events)}</td></tr>`).join('');
     const activityRows = data.events.slice(0,200).map(row => `<tr><td>${esc(new Date(row.ts).toLocaleString())}</td><td><strong>${esc(row.memberName)}</strong></td><td>${statusPill(row.action.toUpperCase())}</td><td>${qty(row.amount)}</td></tr>`).join('');
     return `<div class="aiql-card"><div class="aiql-card-head"><div><h3>${esc(item.name)}</h3><span class="aiql-muted">Consumption Tracker</span></div><div class="aiql-actions"><button data-aiql-action="change-consumption-item">Change Item</button><button data-aiql-action="sync-consumption" ${state.busy?'disabled':''}>Sync</button></div></div>
-      <div class="aiql-consumption-filters">${[1,7,30,90,365].map(days => `<button data-aiql-consumption-days="${days}" class="${num(state.consumptionDays)===days?'active':''}">${days===1?'Today':days+' Days'}</button>`).join('')}</div>
+      <div class="aiql-consumption-filters">${[1,7,30,90].map(days => `<button data-aiql-consumption-days="${days}" class="${num(state.consumptionDays)===days?'active':''}">${days===1?'Today':days+' Days'}</button>`).join('')}</div>
       <div class="aiql-grid aiql-kpis aiql-consumption-kpis"><div class="aiql-card"><span>Total Used</span><strong>${qty(total)}</strong><small>Last ${state.consumptionDays} day(s)</small></div><div class="aiql-card"><span>Members</span><strong>${data.members.length}</strong><small>Recorded users</small></div><div class="aiql-card"><span>Use Events</span><strong>${data.used.length}</strong><small>Individual logs</small></div></div>
       <button data-aiql-action="copy-consumption">Copy Staff Report</button>
     </div>
