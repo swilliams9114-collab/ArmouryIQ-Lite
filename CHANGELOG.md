@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Fixed faction-news pagination to follow Torn's time-based next-page links instead of repeating pages with numeric offsets.
+- Deduplicated matching activity while syncing so progress and saved totals reflect unique news records.
+
 ## 0.2.2
 
 - Split the 90-day Consumption sync into seven-day API windows to avoid large-query backend failures.
