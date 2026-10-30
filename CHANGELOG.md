@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+- Made the initial 90-day consumption import resumable with progress saved between runs.
+- Limited each manual backfill run to a conservative API request budget.
+- After backfill completion, normal syncs fetch only new activity with a one-hour overlap.
+- Added a clear daily-read-limit message confirming completed progress remains saved.
+
 ## 0.2.5
 
 - Added timestamp-based faction-news pagination when Torn omits its next-page link.
