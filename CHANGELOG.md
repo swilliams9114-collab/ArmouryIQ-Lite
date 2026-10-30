@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4
+
+- Fixed consumption quantities being inflated by unrelated numbers in faction-news text.
+- Quantities are now accepted only when directly attached to the item or action; otherwise each usage log counts as one.
+
 ## 0.2.3
 
 - Fixed faction-news pagination to follow Torn's time-based next-page links instead of repeating pages with numeric offsets.
