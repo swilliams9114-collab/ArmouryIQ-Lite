@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.5
+// @version      0.2.6
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.5';
+  const VERSION = '0.2.6';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -282,13 +282,20 @@
       const incoming = new Map();
       const catalog = Object.values(loadCatalog()).sort((a,b) => b.name.length - a.name.length);
       let rawChecked = 0;
+      let requestsMade = 0;
+      const requestBudget = 25;
       const limit = 100;
       const nowSeconds = Math.floor(Date.now() / 1000);
       const windowSeconds = 7 * 86400;
       const oldestSeconds = nowSeconds - 90 * 86400;
-      let windowTo = nowSeconds;
-      while (windowTo > oldestSeconds) {
-        const windowFrom = Math.max(oldestSeconds, windowTo - windowSeconds);
+      const startingState = get(KEYS.state, {});
+      const backfillComplete = startingState.consumptionBackfillComplete === true;
+      const lastSyncSeconds = Math.floor(num(startingState.consumptionSync) / 1000);
+      const scanFloor = backfillComplete ? Math.max(oldestSeconds, (lastSyncSeconds || nowSeconds) - 3600) : oldestSeconds;
+      const savedCursor = num(startingState.consumptionBackfillTo);
+      let windowTo = !backfillComplete && savedCursor > scanFloor ? Math.min(nowSeconds, savedCursor) : nowSeconds;
+      while (windowTo > scanFloor) {
+        const windowFrom = Math.max(scanFloor, windowTo - windowSeconds);
         let pageNumber = 0;
         let nextUrl = 'https://api.torn.com/v2/faction/news?cat=armoryAction&from=' + windowFrom + '&to=' + windowTo +
           '&sort=DESC&limit=' + limit + '&stripTags=true&timestamp=' + Math.floor(Date.now() / 1000) +
@@ -302,6 +309,7 @@
             try { body = await apiRequest(nextUrl); break; }
             catch (error) {
               lastError = error;
+              if (/daily read limit/i.test(error.message || String(error))) throw error;
               if (attempt < 3) {
                 state.status = `Torn API paused at ${rawChecked.toLocaleString()} entries. Retrying (${attempt}/3)…`;
                 renderStatusOnly();
@@ -310,6 +318,7 @@
             }
           }
           if (!body) throw lastError || new Error('Torn did not return faction news.');
+          requestsMade++;
           const source = body.news ?? body.data?.news ?? body.response?.news;
           const page = Array.isArray(source)
             ? source.map((row,index) => [row?.id ?? `${windowFrom}-${pageNumber}-${index}`, row])
@@ -346,19 +355,27 @@
         incoming.forEach((row,id) => checkpoint.set(id, row));
         saveConsumption([...checkpoint.values()]);
         const checkpointState = get(KEYS.state, {});
-        set(KEYS.state, {...checkpointState, consumptionRawChecked:rawChecked, consumptionImported:incoming.size});
+        set(KEYS.state, {...checkpointState, consumptionRawChecked:rawChecked, consumptionImported:incoming.size,
+          consumptionBackfillTo:backfillComplete ? num(checkpointState.consumptionBackfillTo) : windowFrom - 1});
         windowTo = windowFrom - 1;
+        if (requestsMade >= requestBudget && windowTo > scanFloor) {
+          state.status = `History progress saved — ${rawChecked.toLocaleString()} entries scanned this run. Press Sync again to continue.`;
+          return;
+        }
         await sleep(650);
       }
       const merged = new Map(loadConsumption().map(row => [String(row.id), row]));
       incoming.forEach((row,id) => merged.set(id, row));
       saveConsumption([...merged.values()]);
       const savedState = get(KEYS.state, {});
-      set(KEYS.state, {...savedState, consumptionSync:Date.now(), consumptionImported:incoming.size, consumptionRawChecked:rawChecked});
-      state.status = `Consumption synchronized — ${rawChecked.toLocaleString()} news entries scanned; ${incoming.size.toLocaleString()} matching records found.`;
+      set(KEYS.state, {...savedState, consumptionSync:Date.now(), consumptionImported:incoming.size, consumptionRawChecked:rawChecked,
+        consumptionBackfillComplete:true, consumptionBackfillTo:0});
+      state.status = `${backfillComplete ? 'Consumption synchronized' : '90-day history complete'} — ${rawChecked.toLocaleString()} news entries scanned; ${incoming.size.toLocaleString()} matching records found.`;
     } catch (error) {
       const message = error.message || String(error);
-      state.lastError = /access|permission|selection|16/i.test(message)
+      state.lastError = /daily read limit/i.test(message)
+        ? 'Torn API daily read limit reached. Your completed history progress was saved; continue Sync after Torn resets the allowance.'
+        : /access|permission|selection|16/i.test(message)
         ? 'Consumption needs an updated ArmouryIQ API key with Faction → News permission. Open Settings and create a new custom key.'
         : 'Consumption sync failed: ' + message;
     } finally {
