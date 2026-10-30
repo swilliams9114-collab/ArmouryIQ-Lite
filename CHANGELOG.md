@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.7
+
+- Removed the historical consumption backfill and changed tracking to start from today forward.
+- Clears the incomplete historical consumption import once during this upgrade.
+- Future manual syncs request only activity since tracking began or since the last successful sync.
+
 ## 0.2.6
 
 - Made the initial 90-day consumption import resumable with progress saved between runs.
