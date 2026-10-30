@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.4
+// @version      0.2.5
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.4';
+  const VERSION = '0.2.5';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -320,15 +320,26 @@
             if (parsed) incoming.set(String(parsed.id), parsed);
           });
           pageNumber++;
-          const suppliedNext = body?._metadata?.links?.next ?? body?.metadata?.links?.next ?? null;
-          if (!page.length || !suppliedNext) nextUrl = '';
-          else {
+          const suppliedNext = body?._metadata?.links?.next ?? body?._metadata?.next ??
+            body?.metadata?.links?.next ?? body?.metadata?.next ?? body?.pagination?.next ?? body?.links?.next ?? null;
+          if (!page.length) nextUrl = '';
+          else if (suppliedNext) {
             const parsedNext = new URL(String(suppliedNext), 'https://api.torn.com');
             if (parsedNext.protocol !== 'https:' || parsedNext.hostname !== 'api.torn.com') throw new Error('Torn returned an invalid pagination link.');
             parsedNext.searchParams.set('stripTags', 'true');
             parsedNext.searchParams.set('comment', 'ArmouryIQ news');
             nextUrl = parsedNext.toString();
           }
+          else if (page.length >= limit) {
+            const timestamps = page.map(([,row]) => num(row?.timestamp ?? row?.created_at ?? row?.time)).filter(value => value > 0);
+            const oldest = timestamps.length ? Math.min(...timestamps) : 0;
+            if (oldest > windowFrom) {
+              nextUrl = 'https://api.torn.com/v2/faction/news?cat=armoryAction&from=' + windowFrom + '&to=' + (oldest - 1) +
+                '&sort=DESC&limit=' + limit + '&stripTags=true&timestamp=' + Math.floor(Date.now() / 1000) +
+                '&comment=' + encodeURIComponent('ArmouryIQ news');
+            } else nextUrl = '';
+          }
+          else nextUrl = '';
           await sleep(650);
         }
         const checkpoint = new Map(loadConsumption().map(row => [String(row.id), row]));
