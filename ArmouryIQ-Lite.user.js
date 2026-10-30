@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.3
+// @version      0.2.4
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.3';
+  const VERSION = '0.2.4';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -228,6 +228,26 @@
     return 'armory action';
   }
 
+  function newsAmount(text, itemName, itemIndex) {
+    const before = text.slice(Math.max(0, itemIndex - 70), itemIndex).replace(/\[\d+\]/g, ' ');
+    const after = text.slice(itemIndex + itemName.length, itemIndex + itemName.length + 40);
+    const strictPatterns = [
+      /(?:^|\s)([\d,]+)\s*[x×]\s*$/i,
+      /(?:used|consumed|withdrew|removed|took|returned|recovered|retrieved|loaned|borrowed|deposited|added)\s+([\d,]+)\s*$/i,
+      /^\s*[x×]\s*([\d,]+)(?:\b|\s|$)/i,
+      /^\s*\(?(?:quantity|qty)\s*:?\s*([\d,]+)/i
+    ];
+    for (const pattern of strictPatterns.slice(0,2)) {
+      const match = before.match(pattern);
+      if (match) return Math.max(1, num(match[1].replace(/,/g, '')));
+    }
+    for (const pattern of strictPatterns.slice(2)) {
+      const match = after.match(pattern);
+      if (match) return Math.max(1, num(match[1].replace(/,/g, '')));
+    }
+    return 1;
+  }
+
   function parseNewsRecord(record, fallbackId, catalog) {
     const text = plainNewsText(record?.text ?? record?.news ?? record?.description ?? record?.title ?? '');
     if (!text) return null;
@@ -235,9 +255,7 @@
     const item = catalog.find(entry => lower.includes(entry.name.toLowerCase()));
     if (!item) return null;
     const index = lower.indexOf(item.name.toLowerCase());
-    const before = text.slice(Math.max(0, index - 45), index);
-    const amountMatches = [...before.matchAll(/([\d,]+)\s*x?\s*/gi)];
-    const amount = amountMatches.length ? num(amountMatches[amountMatches.length - 1][1].replace(/,/g,'')) : 1;
+    const amount = newsAmount(text, item.name, index);
     const action = newsAction(text);
     const userObject = record?.user || record?.member || record?.player;
     let memberName = String(userObject?.name || record?.user_name || record?.member_name || '').trim();
