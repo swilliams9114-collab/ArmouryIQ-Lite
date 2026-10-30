@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+
+- Added timestamp-based faction-news pagination when Torn omits its next-page link.
+- Consumption sync now continues past the first 100 Armory events in each seven-day block.
+
 ## 0.2.4
 
 - Fixed consumption quantities being inflated by unrelated numbers in faction-news text.
