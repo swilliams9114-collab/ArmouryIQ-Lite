@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8
+
+- Consolidated the copied staff report into a short consumption summary.
+- Reports now show total used, total unique members, and daily quantity with daily member counts.
+- Removed individual member names and individual activity lines from copied reports.
+
 ## 0.2.7
 
 - Removed the historical consumption backfill and changed tracking to start from today forward.
