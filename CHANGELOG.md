@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Split the 90-day Consumption sync into seven-day API windows to avoid large-query backend failures.
+- Added automatic retries for temporary Torn API errors and saved progress after every completed window.
+- Clarified sync progress by separating news entries scanned from matching armoury records found.
+
 ## 0.2.1
 
 - Reduced Consumption Tracker syncing and retention from one year to 90 days.
