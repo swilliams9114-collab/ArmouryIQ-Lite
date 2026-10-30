@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.7
+// @version      0.2.8
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.7';
+  const VERSION = '0.2.8';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -736,9 +736,18 @@
     const data = consumptionData();
     const total = data.used.reduce((sum,row) => sum + num(row.amount),0);
     const period = num(state.consumptionDays) === 1 ? 'Today' : `Last ${state.consumptionDays} days`;
-    return `AURORA SURREALIS — CONSUMPTION REPORT\nItem: ${item.name}\nPeriod: ${period}\nUpdated: ${new Date().toLocaleString()}\n\nTotal used: ${qty(total)}\n\nBY MEMBER\n` +
-      (data.members.length ? data.members.map(row => `${row.name}: ${qty(row.amount)}`).join('\n') : 'No recorded use.') +
-      `\n\nACTIVITY\n` + (data.used.length ? data.used.slice(0,50).map(row => `${new Date(row.ts).toLocaleString()} — ${row.memberName} used ${qty(row.amount)}`).join('\n') : 'No recorded use.');
+    const days = {};
+    data.used.forEach(row => {
+      const date = new Date(row.ts);
+      const key = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+      if (!days[key]) days[key] = {date, amount:0, members:new Set()};
+      days[key].amount += num(row.amount);
+      days[key].members.add(row.memberId || row.memberName || 'Unknown member');
+    });
+    const daily = Object.values(days).sort((a,b) => b.date-a.date)
+      .map(row => `${row.date.toLocaleDateString()}: ${qty(row.amount)} used by ${row.members.size} member${row.members.size===1?'':'s'}`)
+      .join('\n');
+    return `AURORA SURREALIS — CONSUMPTION SUMMARY\nItem: ${item.name}\nPeriod: ${period}\nUpdated: ${new Date().toLocaleString()}\n\nTotal used: ${qty(total)}\nMembers: ${data.members.length}\n\nDAILY USAGE\n${daily || 'No recorded use.'}`;
   }
 
   function consumptionUI() {
