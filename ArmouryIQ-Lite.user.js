@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.2
+// @version      0.2.3
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.2';
+  const VERSION = '0.2.3';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -261,7 +261,7 @@
     state.status = 'Loading faction armory activity…';
     render();
     try {
-      const incoming = [];
+      const incoming = new Map();
       const catalog = Object.values(loadCatalog()).sort((a,b) => b.name.length - a.name.length);
       let rawChecked = 0;
       const limit = 100;
@@ -271,17 +271,17 @@
       let windowTo = nowSeconds;
       while (windowTo > oldestSeconds) {
         const windowFrom = Math.max(oldestSeconds, windowTo - windowSeconds);
-        let offset = 0;
-        while (offset < 5000) {
-          state.status = `Loading 90-day activity… ${rawChecked.toLocaleString()} news entries scanned; ${incoming.length.toLocaleString()} matching records found`;
+        let pageNumber = 0;
+        let nextUrl = 'https://api.torn.com/v2/faction/news?cat=armoryAction&from=' + windowFrom + '&to=' + windowTo +
+          '&sort=DESC&limit=' + limit + '&stripTags=true&timestamp=' + Math.floor(Date.now() / 1000) +
+          '&comment=' + encodeURIComponent('ArmouryIQ news');
+        while (nextUrl && pageNumber < 100) {
+          state.status = `Loading 90-day activity… ${rawChecked.toLocaleString()} news entries scanned; ${incoming.size.toLocaleString()} matching records found`;
           renderStatusOnly();
-          const url = 'https://api.torn.com/v2/faction/news?cat=armoryAction&from=' + windowFrom + '&to=' + windowTo +
-            '&sort=DESC&limit=' + limit + '&offset=' + offset + '&stripTags=true&timestamp=' +
-            Math.floor(Date.now() / 1000) + '&comment=' + encodeURIComponent('ArmouryIQ news');
           let body;
           let lastError;
           for (let attempt = 1; attempt <= 3; attempt++) {
-            try { body = await apiRequest(url); break; }
+            try { body = await apiRequest(nextUrl); break; }
             catch (error) {
               lastError = error;
               if (attempt < 3) {
@@ -294,32 +294,39 @@
           if (!body) throw lastError || new Error('Torn did not return faction news.');
           const source = body.news ?? body.data?.news ?? body.response?.news;
           const page = Array.isArray(source)
-            ? source.map((row,index) => [row?.id ?? `${windowFrom}-${offset + index}`, row])
+            ? source.map((row,index) => [row?.id ?? `${windowFrom}-${pageNumber}-${index}`, row])
             : Object.entries(source || {});
           rawChecked += page.length;
           page.forEach(([id,row]) => {
             const parsed = parseNewsRecord(row,id,catalog);
-            if (parsed) incoming.push(parsed);
+            if (parsed) incoming.set(String(parsed.id), parsed);
           });
-          offset += page.length;
-          const total = Number(body?._metadata?.total ?? body?._metadata?.links?.total);
-          if (!page.length || page.length < limit || (Number.isFinite(total) && offset >= total)) break;
+          pageNumber++;
+          const suppliedNext = body?._metadata?.links?.next ?? body?.metadata?.links?.next ?? null;
+          if (!page.length || !suppliedNext) nextUrl = '';
+          else {
+            const parsedNext = new URL(String(suppliedNext), 'https://api.torn.com');
+            if (parsedNext.protocol !== 'https:' || parsedNext.hostname !== 'api.torn.com') throw new Error('Torn returned an invalid pagination link.');
+            parsedNext.searchParams.set('stripTags', 'true');
+            parsedNext.searchParams.set('comment', 'ArmouryIQ news');
+            nextUrl = parsedNext.toString();
+          }
           await sleep(650);
         }
         const checkpoint = new Map(loadConsumption().map(row => [String(row.id), row]));
-        incoming.forEach(row => checkpoint.set(String(row.id), row));
+        incoming.forEach((row,id) => checkpoint.set(id, row));
         saveConsumption([...checkpoint.values()]);
         const checkpointState = get(KEYS.state, {});
-        set(KEYS.state, {...checkpointState, consumptionRawChecked:rawChecked, consumptionImported:incoming.length});
+        set(KEYS.state, {...checkpointState, consumptionRawChecked:rawChecked, consumptionImported:incoming.size});
         windowTo = windowFrom - 1;
         await sleep(650);
       }
       const merged = new Map(loadConsumption().map(row => [String(row.id), row]));
-      incoming.forEach(row => merged.set(String(row.id), row));
+      incoming.forEach((row,id) => merged.set(id, row));
       saveConsumption([...merged.values()]);
       const savedState = get(KEYS.state, {});
-      set(KEYS.state, {...savedState, consumptionSync:Date.now(), consumptionImported:incoming.length, consumptionRawChecked:rawChecked});
-      state.status = `Consumption synchronized — ${rawChecked.toLocaleString()} news entries scanned; ${incoming.length.toLocaleString()} matching records found.`;
+      set(KEYS.state, {...savedState, consumptionSync:Date.now(), consumptionImported:incoming.size, consumptionRawChecked:rawChecked});
+      state.status = `Consumption synchronized — ${rawChecked.toLocaleString()} news entries scanned; ${incoming.size.toLocaleString()} matching records found.`;
     } catch (error) {
       const message = error.message || String(error);
       state.lastError = /access|permission|selection|16/i.test(message)
