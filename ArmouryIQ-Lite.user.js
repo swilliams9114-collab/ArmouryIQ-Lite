@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ArmouryIQ Lite
 // @namespace    https://www.torn.com/
-// @version      0.2.6
+// @version      0.2.7
 // @description  Private local-first faction armoury intelligence for TornPDA and userscript managers.
 // @author       ArmouryIQ
 // @match        https://www.torn.com/factions.php*
@@ -19,7 +19,7 @@
   'use strict';
 
   const APP = 'ArmouryIQ Lite';
-  const VERSION = '0.2.6';
+  const VERSION = '0.2.7';
   const ROOT_ID = 'aiql-root';
   const STYLE_ID = 'aiql-style';
   const PREFIX = 'aiql_';
@@ -115,6 +115,20 @@
     for (let index = chunks; index < oldChunks; index++) del(CONSUMPTION_CHUNK_PREFIX + index);
     set(KEYS.consumption, {format:'chunks-v1', chunks, count:clean.length, updatedAt:Date.now()});
   }
+
+  function initializeConsumptionFromToday() {
+    const savedState = get(KEYS.state, {});
+    if (savedState.consumptionTrackingMode === 'from-today-v1') return;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    saveConsumption([]);
+    set(KEYS.state, {...savedState,
+      consumptionTrackingMode:'from-today-v1', consumptionTrackingStart:today.getTime(),
+      consumptionBackfillComplete:true, consumptionBackfillTo:0, consumptionSync:0,
+      consumptionImported:0, consumptionRawChecked:0});
+  }
+
+  initializeConsumptionFromToday();
 
   function isArmouryPage() {
     return location.pathname.endsWith('/factions.php') && location.hash.includes('tab=armoury');
@@ -291,7 +305,10 @@
       const startingState = get(KEYS.state, {});
       const backfillComplete = startingState.consumptionBackfillComplete === true;
       const lastSyncSeconds = Math.floor(num(startingState.consumptionSync) / 1000);
-      const scanFloor = backfillComplete ? Math.max(oldestSeconds, (lastSyncSeconds || nowSeconds) - 3600) : oldestSeconds;
+      const trackingStartSeconds = Math.floor(num(startingState.consumptionTrackingStart) / 1000) || oldestSeconds;
+      const scanFloor = backfillComplete
+        ? Math.max(trackingStartSeconds, lastSyncSeconds ? lastSyncSeconds - 3600 : trackingStartSeconds)
+        : oldestSeconds;
       const savedCursor = num(startingState.consumptionBackfillTo);
       let windowTo = !backfillComplete && savedCursor > scanFloor ? Math.min(nowSeconds, savedCursor) : nowSeconds;
       while (windowTo > scanFloor) {
@@ -370,7 +387,7 @@
       const savedState = get(KEYS.state, {});
       set(KEYS.state, {...savedState, consumptionSync:Date.now(), consumptionImported:incoming.size, consumptionRawChecked:rawChecked,
         consumptionBackfillComplete:true, consumptionBackfillTo:0});
-      state.status = `${backfillComplete ? 'Consumption synchronized' : '90-day history complete'} — ${rawChecked.toLocaleString()} news entries scanned; ${incoming.size.toLocaleString()} matching records found.`;
+      state.status = `Consumption synchronized — ${rawChecked.toLocaleString()} news entries scanned; ${incoming.size.toLocaleString()} matching records found.`;
     } catch (error) {
       const message = error.message || String(error);
       state.lastError = /daily read limit/i.test(message)
